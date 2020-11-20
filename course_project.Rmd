@@ -1,0 +1,133 @@
+---
+title: "PML - Course Project"
+author: "JJW"
+date: "11/19/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, warning=FALSE, message=FALSE}
+## load libraries
+library(caret)
+library(parallel)
+library(doParallel)
+```
+
+### Download and Clean Data
+
+```{r, cache=TRUE, message=FALSE, warning=FALSE}
+## download and load data
+download.file("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv", "pml-training.csv")
+training <- read.csv("pml-training.csv")
+download.file("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv", "pml-testing.csv")
+testing <- read.csv("pml-testing.csv")
+```
+
+Variables with a high percentage of NA values are removed, as they will not provide enough information in training the models.
+
+```{r}
+## remove variables high percentage of NA
+maxNApercent = 0.5
+maxNAcount <- nrow(training) * maxNApercent
+removeVars <- which(colSums(is.na(training) | training =="") > maxNAcount)
+training <- training[,-removeVars]
+testing <- testing[,-removeVars]
+```
+
+Other irrelevant variables are also removed.  
+
+```{r}
+## remove irrelevant index, identifier, and time variables
+testing <- testing[,-c(1:7)]
+training <- training[, -c(1:7)]
+```
+
+The training data set is split to facilitate model stacking.
+
+```{r}
+## split training into two data sets
+set.seed(333)
+inTrain <- createDataPartition(y=training$classe, p=0.7, list=FALSE)
+training1 <- training[inTrain,]
+training2 <- training[-inTrain,]
+```
+
+### Train models
+
+The first step will be to train three models using random forest, boosted trees, and linear discriminant analysis.  
+
+```{r, cache=TRUE, warning=FALSE, message=FALSE}
+## Use parallel processing to increase performance
+cluster <- makeCluster(detectCores()-1)
+registerDoParallel(cluster)
+fitControl <- trainControl(method="cv", number=20, allowParallel = TRUE)
+
+## random forest
+modrf <- train(classe ~ ., method = "rf", data = training1, trControl = fitControl)
+## boosted trees
+modgbm <- train(classe ~ ., method = "gbm", data = training1, trControl = fitControl)
+## linear discriminant analysis
+modlda <- train(classe ~ ., method = "lda", data = training1, trControl = fitControl)
+
+## de-register parallel processing cluster
+stopCluster(cluster)
+registerDoSEQ()
+
+```
+
+The second step is to make predictions using the model and check their accuracy.
+
+```{r}
+## make predictions on second training set for each  model
+predrf <- predict(modrf,training2)
+predgbm <- predict(modgbm,training2)
+predlda <- predict(modlda,training2)
+
+## check rf model accuracy
+confusionMatrix(training2$classe, predrf)
+## check gbm model accuracy
+confusionMatrix(training2$classe, predgbm)
+# check lda model accuracy
+confusionMatrix(training2$classe, predlda)
+```
+
+At about 99% accuracy, the random forest method seems to make the best predictions.
+
+The third step is to stack the three models (using random forest) and check its accuracy.
+
+```{r, cache=TRUE}
+## Use parallel processing to increase performance
+cluster <- makeCluster(detectCores()-1)
+registerDoParallel(cluster)
+fitControl <- trainControl(method="cv", number=20, allowParallel = TRUE)
+
+## stack the models 
+predDF <- data.frame(predrf, predgbm, predlda, classe = training2$classe)
+modstacked <- train(classe ~ ., method = "rf", data=predDF, trControl = fitControl)
+
+## de-register parallel processing cluster
+stopCluster(cluster)
+registerDoSEQ()
+
+## check accuracy
+predstacked <- predict(modstacked, predDF)
+confusionMatrix(predDF$classe, predstacked)
+```
+
+The stacked model appears to be as accurate as the single random forest model, so the random forest model will be used as the final model.
+
+### Make out-of-sample predictions
+
+```{r}
+## make predictions on testing data
+predtesting <- predict(modrf, testing)
+```
+
+Given its high accuracy in predicting the second training data set, it is anticipated that the final model will make out-of-sample predictions with near-perfect accuracy.
+
+
+
+]
